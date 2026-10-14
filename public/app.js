@@ -1,369 +1,135 @@
-/**
- * app.js
- * Client-side script for NL-to-SQL web application on Vercel.
- */
-
-// Application state
-const state = {
-  samples: [],
-  activeCategory: "📋 Basic",
-  history: JSON.parse(localStorage.getItem("nl_sql_history") || "[]"),
-  currentResults: null,
-  queriesRun: 0,
-};
-
-// DOM references
-const queryInput = document.getElementById("query-input");
-const queryForm = document.getElementById("query-form");
-const btnClear = document.getElementById("btn-clear");
-const sampleList = document.getElementById("sample-list");
-const categoryTabs = document.getElementById("category-tabs");
-const schemaAccordion = document.getElementById("schema-accordion");
-const historySection = document.getElementById("history-section");
-const historyList = document.getElementById("history-list");
-const errorCard = document.getElementById("error-card");
-const errorText = document.getElementById("error-text");
-const resultsSection = document.getElementById("results-section");
-const emptyState = document.getElementById("empty-state");
-const sqlDisplay = document.getElementById("sql-display");
-const sqlTimePill = document.getElementById("sql-time-pill");
-const btnCopySql = document.getElementById("btn-copy-sql");
-const resultsThead = document.getElementById("results-thead");
-const resultsTbody = document.getElementById("results-tbody");
-const badgeRowCount = document.getElementById("badge-row-count");
-const dataMeta = document.getElementById("data-meta");
-const btnDownloadCsv = document.getElementById("btn-download-csv");
-const explanationText = document.getElementById("explanation-text");
-const explanationQuestionText = document.getElementById("explanation-question-text");
-const statStudents = document.getElementById("stat-students");
-const statCourses = document.getElementById("stat-courses");
-const statEnrollments = document.getElementById("stat-enrollments");
-const statQueriesRun = document.getElementById("stat-queries-run");
-
-// ---------------------------------------------------------------------------
-// Initialization
-// ---------------------------------------------------------------------------
-async function init() {
-  bindEvents();
-  renderHistory();
-  await Promise.all([loadStats(), loadSchema(), loadSamples()]);
+/* Browser workspace for the existing NL-to-SQL API. */
+const $ = id => document.getElementById(id);
+function readHistory() {
+  try { const value = JSON.parse(localStorage.getItem('nl_sql_history') || '[]'); return Array.isArray(value) ? value.filter(q => typeof q === 'string' && q.trim()).slice(-20) : []; }
+  catch { return []; }
 }
+const state = { samples: [], activeCategory: '📋 Basic', history: readHistory(), currentResults: null, queriesRun: 0, loading: false };
+const input = $('query-input'), form = $('query-form'), generate = $('btn-generate'), clear = $('btn-clear');
 
-// ---------------------------------------------------------------------------
-// API Calls
-// ---------------------------------------------------------------------------
+async function fetchJson(url, options = {}) {
+  const response = await fetch(url, { ...options, signal: AbortSignal.timeout(30000) });
+  let data;
+  try { data = await response.json(); } catch { throw new Error('The server returned an unreadable response. Try again shortly.'); }
+  if (!response.ok) throw new Error(data?.error || 'The database service is unavailable. Try again shortly.');
+  return data;
+}
+function updateInput() { $('query-count').textContent = `${input.value.length} / 500`; generate.disabled = state.loading || !input.value.trim(); }
 async function loadStats() {
+  const button = $('connection-status'); $('connection-label').textContent = 'Connecting…'; button.classList.remove('offline');
   try {
-    const res = await fetch("/api/stats?endpoint=stats");
-    if (!res.ok) return;
-    const data = await res.json();
-    if (statStudents && data.students) statStudents.textContent = data.students;
-    if (statCourses && data.courses) statCourses.textContent = data.courses;
-    if (statEnrollments && data.enrollments) statEnrollments.textContent = data.enrollments;
-  } catch (err) {
-    console.warn("Could not load stats:", err);
-  }
+    const data = await fetchJson('/api/stats?endpoint=stats');
+    if (![data.students, data.courses, data.enrollments].every(n => Number.isFinite(n))) throw new Error('Incomplete stats');
+    for (const name of ['students', 'courses', 'enrollments']) $(`stat-${name}`).textContent = data[name].toLocaleString();
+    $('connection-label').textContent = 'Database connected';
+  } catch { $('connection-label').textContent = 'Reconnect database'; button.classList.add('offline'); for (const name of ['students', 'courses', 'enrollments']) $(`stat-${name}`).textContent = '—'; }
 }
-
-async function loadSchema() {
-  try {
-    const res = await fetch("/api/schema?endpoint=schema");
-    if (!res.ok) return;
-    const data = await res.json();
-    if (data.schema) renderSchema(data.schema);
-    if (data.samples && (!state.samples || !state.samples.length)) {
-      state.samples = data.samples;
-      renderSamples();
-    }
-  } catch (err) {
-    if (schemaAccordion) schemaAccordion.innerHTML = `<div class="schema-col-row">Schema unavailable</div>`;
-  }
-}
-
 async function loadSamples() {
-  try {
-    const res = await fetch("/api/samples?endpoint=samples");
-    if (!res.ok) return;
-    const data = await res.json();
-    state.samples = data.samples || [];
-    renderSamples();
-  } catch (err) {
-    console.warn("Could not load samples:", err);
-  }
+  try { const data = await fetchJson('/api/samples?endpoint=samples'); state.samples = Array.isArray(data.samples) ? data.samples : []; renderSamples(); }
+  catch { $('sample-list').textContent = 'Examples unavailable. You can still type a question.'; }
 }
-
-async function runQuery(question) {
-  question = (question || "").trim();
-  if (!question) return;
-
-  hideError();
-  showLoading(true);
-
-  try {
-    const res = await fetch("/api/query?endpoint=query", {
-      method: "POST",
-      headers: { "Content-Type": "application/json" },
-      body: JSON.stringify({ question }),
-    });
-
-    const data = await res.json();
-
-    if (!res.ok || !data.success) {
-      showError(data.error || "An unexpected error occurred while generating query.");
-      showLoading(false);
-      return;
-    }
-
-    state.currentResults = data;
-    state.queriesRun++;
-    if (statQueriesRun) statQueriesRun.textContent = state.queriesRun;
-
-    addToHistory(question);
-    displayResults(data);
-  } catch (err) {
-    showError("Network error: Could not reach NL-to-SQL API serverless function.");
-  } finally {
-    showLoading(false);
-  }
+async function loadSchema() {
+  try { const data = await fetchJson('/api/schema?endpoint=schema'); if (!data.schema || typeof data.schema !== 'object') throw new Error('Schema unavailable'); renderSchema(data.schema); }
+  catch { $('schema-accordion').textContent = 'Tables could not load. Check the database connection.'; }
 }
-
-// ---------------------------------------------------------------------------
-// Rendering
-// ---------------------------------------------------------------------------
+function selectPanel(id) {
+  for (const panel of document.querySelectorAll('.sidebar-section')) panel.hidden = panel.id !== id;
+  for (const button of document.querySelectorAll('[data-panel]')) { const active = button.dataset.panel === id; button.classList.toggle('active', active); button.setAttribute('aria-pressed', String(active)); }
+}
 function renderSamples() {
-  if (!sampleList) return;
-  sampleList.innerHTML = "";
-
-  const filtered = state.samples.filter(s => s.category === state.activeCategory);
-  filtered.forEach(item => {
-    const btn = document.createElement("button");
-    btn.className = "sample-btn";
-    btn.textContent = item.question;
-    btn.onclick = () => {
-      queryInput.value = item.question;
-      runQuery(item.question);
-    };
-    sampleList.appendChild(btn);
-  });
+  const list = $('sample-list'); list.replaceChildren();
+  for (const item of state.samples.filter(s => s.category === state.activeCategory)) {
+    const button = document.createElement('button'); button.className = 'sample-btn'; button.textContent = item.question; button.disabled = state.loading;
+    button.addEventListener('click', () => chooseQuestion(item.question)); list.append(button);
+  }
+  if (!list.children.length) list.textContent = 'No examples in this category.';
 }
-
 function renderSchema(schema) {
-  if (!schemaAccordion) return;
-  schemaAccordion.innerHTML = "";
-
-  const icons = { students: "👤", courses: "📚", enrollments: "📝" };
-
-  for (const [table, cols] of Object.entries(schema)) {
-    const details = document.createElement("details");
-    details.className = "schema-table-item";
-
-    const summary = document.createElement("summary");
-    summary.className = "schema-table-summary";
-    summary.textContent = `${icons[table] || "📋"} ${table} (${cols.length})`;
-
-    const content = document.createElement("div");
-    content.className = "schema-table-content";
-
-    cols.forEach(col => {
-      const row = document.createElement("div");
-      row.className = "schema-col-row";
-      row.innerHTML = `
-        <span class="schema-col-name">${col.name}${col.pk ? " 🔑" : ""}</span>
-        <span class="schema-col-type">${col.type}</span>
-      `;
-      content.appendChild(row);
-    });
-
-    details.appendChild(summary);
-    details.appendChild(content);
-    schemaAccordion.appendChild(details);
+  const container = $('schema-accordion'); container.replaceChildren();
+  for (const [name, columns] of Object.entries(schema)) {
+    if (!Array.isArray(columns)) continue;
+    const details = document.createElement('details'); details.className = 'schema-table-item';
+    const summary = document.createElement('summary'); summary.className = 'schema-table-summary'; summary.textContent = `${name} (${columns.length})`;
+    const content = document.createElement('div'); content.className = 'schema-table-content';
+    for (const column of columns) {
+      const row = document.createElement('div'); row.className = 'schema-col-row';
+      const label = document.createElement('span'); label.className = 'schema-col-name'; label.textContent = `${column.name}${column.pk ? ' · primary key' : ''}`;
+      const type = document.createElement('span'); type.className = 'schema-col-type'; type.textContent = column.type;
+      row.append(label, type); content.append(row);
+    }
+    details.append(summary, content); container.append(details);
   }
 }
-
+function saveHistory() { try { localStorage.setItem('nl_sql_history', JSON.stringify(state.history)); } catch { /* Queries still run if storage is blocked. */ } }
 function renderHistory() {
-  if (!historyList || !historySection) return;
-  if (!state.history.length) {
-    historySection.style.display = "none";
-    return;
+  const list = $('history-list'); list.replaceChildren();
+  for (const question of state.history.slice(-5).reverse()) {
+    const button = document.createElement('button'); button.className = 'history-btn'; button.textContent = question; button.disabled = state.loading;
+    button.addEventListener('click', () => chooseQuestion(question)); list.append(button);
   }
-
-  historySection.style.display = "flex";
-  historyList.innerHTML = "";
-
-  state.history.slice(-5).reverse().forEach(q => {
-    const btn = document.createElement("button");
-    btn.className = "history-btn";
-    btn.textContent = `↩ ${q}`;
-    btn.onclick = () => {
-      queryInput.value = q;
-      runQuery(q);
-    };
-    historyList.appendChild(btn);
-  });
+  if (!list.children.length) { const note = document.createElement('p'); note.className = 'sidebar-note'; note.textContent = 'Your next query starts the collection.'; list.append(note); }
 }
-
-function addToHistory(q) {
-  if (!state.history.includes(q)) {
-    state.history.push(q);
-    if (state.history.length > 20) state.history.shift();
-    localStorage.setItem("nl_sql_history", JSON.stringify(state.history));
-    renderHistory();
+function addHistory(question) { state.history = [...state.history.filter(q => q !== question), question].slice(-20); saveHistory(); renderHistory(); }
+function selectTab(id, focus = false) {
+  for (const tab of document.querySelectorAll('.tab-btn')) {
+    const active = tab.dataset.tab === id; tab.classList.toggle('active', active); tab.setAttribute('aria-selected', String(active)); tab.tabIndex = active ? 0 : -1;
+    if (active && focus) tab.focus();
   }
+  for (const panel of document.querySelectorAll('.tab-content')) panel.hidden = panel.id !== id;
 }
-
+function setLoading(loading) {
+  state.loading = loading; input.disabled = loading; clear.disabled = loading; document.body.classList.toggle('busy', loading);
+  document.querySelector('.output-panel').setAttribute('aria-busy', String(loading));
+  generate.querySelector('.button-label').textContent = loading ? 'Running…' : 'Run query';
+  for (const button of document.querySelectorAll('.sample-btn,.history-btn,[data-question]')) button.disabled = loading;
+  $('loading-state').hidden = !loading;
+  if (loading) { $('empty-state').hidden = true; $('results-section').hidden = true; $('empty-footer').hidden = true; $('output-label').textContent = 'Processing your question'; }
+  updateInput();
+}
+function showError(message) {
+  $('error-text').textContent = message; $('error-card').hidden = false; $('results-section').hidden = true; $('empty-state').hidden = true; $('empty-footer').hidden = false; $('output-label').textContent = 'Try another question';
+}
+function chooseQuestion(question) { if (state.loading) return; input.value = question; updateInput(); void runQuery(question); }
+async function runQuery(question) {
+  question = String(question || '').trim(); if (!question || state.loading) return;
+  if (question.length > 500) return showError('Keep your question to 500 characters.');
+  $('error-card').hidden = true; setLoading(true);
+  try {
+    const data = await fetchJson('/api/query?endpoint=query', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ question }) });
+    if (!data.success || typeof data.sql !== 'string' || !Array.isArray(data.rows) || !Array.isArray(data.columns)) throw new Error(data.error || 'The query response was incomplete. Try again.');
+    state.currentResults = data; state.queriesRun++; $('stat-queries-run').textContent = state.queriesRun; addHistory(question); displayResults(data);
+  } catch (error) { showError(error instanceof TypeError ? 'Could not reach the database. Check your connection and try again.' : error.name === 'TimeoutError' ? 'The request timed out. Try again shortly.' : error.message || 'The query could not run. Try again.'); }
+  finally { setLoading(false); }
+}
 function displayResults(data) {
-  if (emptyState) emptyState.style.display = "none";
-  if (resultsSection) resultsSection.style.display = "flex";
-
-  // SQL tab
-  if (sqlDisplay) sqlDisplay.textContent = data.sql || "";
-  if (sqlTimePill) sqlTimePill.textContent = `⏱ ${data.exec_time_ms} ms`;
-
-  // Results tab
-  if (badgeRowCount) badgeRowCount.textContent = `${data.row_count} rows`;
-  if (dataMeta) dataMeta.textContent = `Returned ${data.row_count} rows across ${data.columns.length} columns`;
-
-  // Render Table
-  if (resultsThead && resultsTbody) {
-    resultsThead.innerHTML = "";
-    resultsTbody.innerHTML = "";
-
-    if (data.columns && data.columns.length) {
-      const trHead = document.createElement("tr");
-      data.columns.forEach(col => {
-        const th = document.createElement("th");
-        th.textContent = col;
-        trHead.appendChild(th);
-      });
-      resultsThead.appendChild(trHead);
-    }
-
-    if (data.rows && data.rows.length) {
-      data.rows.forEach(row => {
-        const tr = document.createElement("tr");
-        data.columns.forEach(col => {
-          const td = document.createElement("td");
-          td.textContent = row[col] !== null ? row[col] : "NULL";
-          tr.appendChild(td);
-        });
-        resultsTbody.appendChild(tr);
-      });
-    } else {
-      resultsTbody.innerHTML = `<tr><td colspan="${Math.max(data.columns.length, 1)}" style="text-align:center;color:#94a3b8;padding:24px;">Query returned 0 rows.</td></tr>`;
-    }
-  }
-
-  // Explanation tab
-  if (explanationText) explanationText.textContent = data.explanation || "No explanation provided.";
-  if (explanationQuestionText) explanationQuestionText.textContent = data.question || "";
+  $('empty-state').hidden = true; $('results-section').hidden = false; $('empty-footer').hidden = true; $('output-label').textContent = 'Query complete';
+  $('sql-display').textContent = data.sql;
+  $('sql-time-pill').textContent = `${data.exec_time_ms ?? '—'} ms database time`;
+  $('badge-row-count').textContent = `${data.row_count} rows`; $('data-meta').textContent = `${data.row_count} rows · ${data.columns.length} columns`; $('btn-download-csv').disabled = !data.rows.length;
+  const head = $('results-thead'), body = $('results-tbody'); head.replaceChildren(); body.replaceChildren(); const header = document.createElement('tr');
+  for (const column of data.columns) { const th = document.createElement('th'); th.scope = 'col'; th.textContent = column; header.append(th); } head.append(header);
+  for (const row of data.rows) { const tr = document.createElement('tr'); for (const column of data.columns) { const td = document.createElement('td'); td.textContent = row[column] == null ? 'NULL' : String(row[column]); tr.append(td); } body.append(tr); }
+  if (!data.rows.length) { const tr = document.createElement('tr'), td = document.createElement('td'); td.colSpan = Math.max(data.columns.length, 1); td.className = 'empty-row'; td.textContent = 'No rows matched this question. Try a broader filter.'; tr.append(td); body.append(tr); }
+  $('explanation-text').textContent = data.explanation || 'No explanation was returned.'; $('explanation-question-text').textContent = data.question; selectTab('tab-data');
+  if (window.innerWidth <= 780) document.querySelector('.output-panel').scrollIntoView({ block: 'start', behavior: window.matchMedia('(prefers-reduced-motion: reduce)').matches ? 'instant' : 'smooth' });
 }
-
-function showError(msg) {
-  if (errorText) errorText.textContent = msg;
-  if (errorCard) errorCard.style.display = "flex";
-  if (resultsSection) resultsSection.style.display = "none";
-}
-
-function hideError() {
-  if (errorCard) errorCard.style.display = "none";
-}
-
-function showLoading(isLoading) {
-  const btn = document.getElementById("btn-generate");
-  if (!btn) return;
-  if (isLoading) {
-    btn.innerHTML = `<span class="btn-icon">⏳</span> Running...`;
-    btn.disabled = true;
-  } else {
-    btn.innerHTML = `<span class="btn-icon">⚡</span> Generate`;
-    btn.disabled = false;
-  }
-}
-
-// ---------------------------------------------------------------------------
-// Event Listeners
-// ---------------------------------------------------------------------------
+function csvCell(value) { let text = value == null ? '' : String(value); if (/^\s*[=+@-]/.test(text)) text = `'${text}`; return `"${text.replace(/"/g, '""')}"`; }
 function bindEvents() {
-  // Query Form
-  if (queryForm) {
-    queryForm.addEventListener("submit", (e) => {
-      e.preventDefault();
-      runQuery(queryInput.value);
-    });
+  input.addEventListener('input', () => { updateInput(); if (state.currentResults && input.value.trim() !== state.currentResults.question) $('output-label').textContent = 'Previous question · run to update'; });
+  input.addEventListener('keydown', event => { if ((event.ctrlKey || event.metaKey) && event.key === 'Enter') { event.preventDefault(); void runQuery(input.value); } });
+  form.addEventListener('submit', event => { event.preventDefault(); void runQuery(input.value); });
+  clear.addEventListener('click', () => { if (state.loading) return; input.value = ''; state.currentResults = null; $('error-card').hidden = true; $('results-section').hidden = true; $('empty-state').hidden = false; $('empty-footer').hidden = false; $('output-label').textContent = 'Ready when you are'; updateInput(); input.focus(); });
+  for (const button of document.querySelectorAll('[data-panel]')) button.addEventListener('click', () => selectPanel(button.dataset.panel));
+  for (const button of document.querySelectorAll('[data-question]')) button.addEventListener('click', () => chooseQuestion(button.dataset.question));
+  $('category-tabs').addEventListener('click', event => { const button = event.target.closest('.cat-pill'); if (!button) return; state.activeCategory = button.dataset.category; for (const pill of document.querySelectorAll('.cat-pill')) { const active = pill === button; pill.classList.toggle('active', active); pill.setAttribute('aria-pressed', String(active)); } renderSamples(); });
+  $('btn-clear-history').addEventListener('click', () => { state.history = []; saveHistory(); renderHistory(); });
+  const tabs = [...document.querySelectorAll('.tab-btn')];
+  for (const [index, tab] of tabs.entries()) {
+    tab.addEventListener('click', () => selectTab(tab.dataset.tab));
+    tab.addEventListener('keydown', event => { let target; if (event.key === 'ArrowRight') target = (index + 1) % tabs.length; if (event.key === 'ArrowLeft') target = (index + tabs.length - 1) % tabs.length; if (event.key === 'Home') target = 0; if (event.key === 'End') target = tabs.length - 1; if (target !== undefined) { event.preventDefault(); selectTab(tabs[target].dataset.tab, true); } });
   }
-
-  // Clear Button
-  if (btnClear) {
-    btnClear.addEventListener("click", () => {
-      if (queryInput) queryInput.value = "";
-      hideError();
-      if (resultsSection) resultsSection.style.display = "none";
-      if (emptyState) emptyState.style.display = "block";
-    });
-  }
-
-  // Category Tabs
-  if (categoryTabs) {
-    categoryTabs.addEventListener("click", (e) => {
-      const pill = e.target.closest(".cat-pill");
-      if (!pill) return;
-      categoryTabs.querySelectorAll(".cat-pill").forEach(p => p.classList.remove("active"));
-      pill.classList.add("active");
-      state.activeCategory = pill.dataset.category;
-      renderSamples();
-    });
-  }
-
-  // Result Tabs
-  document.querySelectorAll(".tab-btn").forEach(btn => {
-    btn.addEventListener("click", () => {
-      document.querySelectorAll(".tab-btn").forEach(b => b.classList.remove("active"));
-      document.querySelectorAll(".tab-content").forEach(c => c.classList.remove("active"));
-      btn.classList.add("active");
-      const target = document.getElementById(btn.dataset.tab);
-      if (target) target.classList.add("active");
-    });
-  });
-
-  // Copy SQL
-  if (btnCopySql) {
-    btnCopySql.addEventListener("click", async () => {
-      if (!state.currentResults || !state.currentResults.sql) return;
-      try {
-        await navigator.clipboard.writeText(state.currentResults.sql);
-        btnCopySql.textContent = "✅ Copied!";
-        setTimeout(() => { btnCopySql.textContent = "📋 Copy SQL"; }, 2000);
-      } catch (err) {
-        btnCopySql.textContent = "Error copying";
-      }
-    });
-  }
-
-  // Download CSV
-  if (btnDownloadCsv) {
-    btnDownloadCsv.addEventListener("click", () => {
-      if (!state.currentResults || !state.currentResults.rows || !state.currentResults.rows.length) return;
-      const data = state.currentResults;
-      const csvRows = [data.columns.join(",")];
-
-      data.rows.forEach(row => {
-        const values = data.columns.map(col => {
-          const val = row[col] === null ? "" : String(row[col]);
-          return `"${val.replace(/"/g, '""')}"`;
-        });
-        csvRows.push(values.join(","));
-      });
-
-      const blob = new Blob([csvRows.join("\n")], { type: "text/csv;charset=utf-8;" });
-      const url = URL.createObjectURL(blob);
-      const a = document.createElement("a");
-      a.href = url;
-      a.download = "query_results.csv";
-      a.click();
-      URL.revokeObjectURL(url);
-    });
-  }
+  $('btn-copy-sql').addEventListener('click', async () => { if (!state.currentResults) return; const label = $('btn-copy-sql').querySelector('span'); try { await navigator.clipboard.writeText(state.currentResults.sql); label.textContent = 'Copied'; } catch { label.textContent = 'Select SQL to copy'; } setTimeout(() => label.textContent = 'Copy SQL', 2500); });
+  $('btn-download-csv').addEventListener('click', () => { const data = state.currentResults; if (!data?.rows.length) return; const lines = [data.columns.map(csvCell).join(','), ...data.rows.map(row => data.columns.map(column => csvCell(row[column])).join(','))]; const url = URL.createObjectURL(new Blob(['\uFEFF', lines.join('\r\n')], { type: 'text/csv;charset=utf-8' })); const link = document.createElement('a'); link.href = url; link.download = 'query_results.csv'; link.click(); setTimeout(() => URL.revokeObjectURL(url), 1000); });
+  $('connection-status').addEventListener('click', () => void Promise.all([loadStats(), loadSamples(), loadSchema()]));
 }
-
-// Start application
-window.addEventListener("DOMContentLoaded", init);
+bindEvents(); updateInput(); renderHistory(); void Promise.all([loadStats(), loadSamples(), loadSchema()]);
