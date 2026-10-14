@@ -54,7 +54,7 @@ async function init() {
 // ---------------------------------------------------------------------------
 async function loadStats() {
   try {
-    const res = await fetch("/api/stats");
+    const res = await fetch("/api/stats?endpoint=stats");
     if (!res.ok) return;
     const data = await res.json();
     if (statStudents && data.students) statStudents.textContent = data.students;
@@ -67,10 +67,14 @@ async function loadStats() {
 
 async function loadSchema() {
   try {
-    const res = await fetch("/api/schema");
+    const res = await fetch("/api/schema?endpoint=schema");
     if (!res.ok) return;
     const data = await res.json();
-    renderSchema(data.schema || {});
+    if (data.schema) renderSchema(data.schema);
+    if (data.samples && (!state.samples || !state.samples.length)) {
+      state.samples = data.samples;
+      renderSamples();
+    }
   } catch (err) {
     if (schemaAccordion) schemaAccordion.innerHTML = `<div class="schema-col-row">Schema unavailable</div>`;
   }
@@ -78,7 +82,7 @@ async function loadSchema() {
 
 async function loadSamples() {
   try {
-    const res = await fetch("/api/samples");
+    const res = await fetch("/api/samples?endpoint=samples");
     if (!res.ok) return;
     const data = await res.json();
     state.samples = data.samples || [];
@@ -96,7 +100,7 @@ async function runQuery(question) {
   showLoading(true);
 
   try {
-    const res = await fetch("/api/query", {
+    const res = await fetch("/api/query?endpoint=query", {
       method: "POST",
       headers: { "Content-Type": "application/json" },
       body: JSON.stringify({ question }),
