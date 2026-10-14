@@ -1,0 +1,250 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>NL → SQL · Natural Language Query Engine</title>
+  <meta name="description" content="Convert plain English questions into verified SQLite queries with instant execution, schema introspection, and results visualization.">
+  <link rel="preconnect" href="https://fonts.googleapis.com">
+  <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+  <link href="https://fonts.googleapis.com/css2?family=Inter:wght@300;400;500;600;700;800&family=JetBrains+Mono:wght@400;500;600;700&display=swap" rel="stylesheet">
+  <link rel="stylesheet" href="style.css">
+</head>
+<body>
+  <div class="app-layout">
+    <!-- Sidebar -->
+    <aside class="sidebar" id="sidebar">
+      <div class="sidebar-header">
+        <div class="logo">
+          <span class="logo-icon">🧠</span>
+          <div class="logo-text">
+            <span class="logo-title">NL → SQL</span>
+            <span class="logo-subtitle">Query Engine</span>
+          </div>
+        </div>
+      </div>
+
+      <div class="sidebar-section">
+        <div class="section-label">💡 Sample Questions</div>
+        <div class="category-tabs" id="category-tabs">
+          <button class="cat-pill active" data-category="📋 Basic">Basic</button>
+          <button class="cat-pill" data-category="🔍 Filter">Filter</button>
+          <button class="cat-pill" data-category="📊 Ranking">Ranking</button>
+          <button class="cat-pill" data-category="📈 Aggregate">Aggregate</button>
+          <button class="cat-pill" data-category="🔗 Join">Join</button>
+        </div>
+        <div class="sample-list" id="sample-list">
+          <!-- Dynamically populated -->
+        </div>
+      </div>
+
+      <div class="sidebar-section">
+        <div class="section-label">🗄️ Database Schema</div>
+        <div class="schema-accordion" id="schema-accordion">
+          <!-- Dynamically populated -->
+          <div class="schema-loading">Loading schema...</div>
+        </div>
+      </div>
+
+      <div class="sidebar-section" id="history-section" style="display: none;">
+        <div class="section-label">🕒 Recent Queries</div>
+        <div class="history-list" id="history-list"></div>
+      </div>
+
+      <div class="sidebar-footer">
+        <div class="footer-badge">⚡ Deterministic Rule Engine</div>
+        <p class="footer-note">No external API keys or heavy GPU required.</p>
+      </div>
+    </aside>
+
+    <!-- Main Content -->
+    <main class="main-content">
+      <!-- Hero -->
+      <header class="hero">
+        <div class="hero-badge">🎓 College NLP Project</div>
+        <h1 class="hero-title">Natural Language → SQL</h1>
+        <p class="hero-subtitle">Ask questions in plain English · generate verified SQL queries · inspect live results</p>
+      </header>
+
+      <!-- Stats Bar -->
+      <section class="stats-grid" id="stats-grid">
+        <div class="stat-card">
+          <div class="stat-value" id="stat-students">20</div>
+          <div class="stat-label">Students</div>
+        </div>
+        <div class="stat-card">
+          <div class="stat-value" id="stat-courses">10</div>
+          <div class="stat-label">Courses</div>
+        </div>
+        <div class="stat-card">
+          <div class="stat-value" id="stat-enrollments">52</div>
+          <div class="stat-label">Enrollments</div>
+        </div>
+        <div class="stat-card">
+          <div class="stat-value" id="stat-queries-run">0</div>
+          <div class="stat-label">Queries Run</div>
+        </div>
+      </section>
+
+      <!-- Query Input Form -->
+      <section class="query-section">
+        <form id="query-form" class="query-form" onsubmit="return false;">
+          <div class="input-wrapper">
+            <span class="input-icon">🔍</span>
+            <input 
+              type="text" 
+              id="query-input" 
+              class="query-input" 
+              placeholder='e.g. "Show the top 5 students by marks"' 
+              autocomplete="off"
+              spellcheck="false"
+              required
+            >
+          </div>
+          <div class="form-actions">
+            <button type="submit" id="btn-generate" class="btn btn-primary">
+              <span class="btn-icon">⚡</span> Generate
+            </button>
+            <button type="button" id="btn-clear" class="btn btn-secondary">
+              ✕ Clear
+            </button>
+          </div>
+        </form>
+        <div class="query-hint">
+          ⌨️ Tip: Type your question and press <kbd>Enter</kbd> or click ⚡ Generate
+        </div>
+      </section>
+
+      <!-- Error Card -->
+      <div id="error-card" class="error-card" style="display: none;">
+        <span class="error-icon">⚠️</span>
+        <div class="error-content">
+          <div class="error-title">Could not generate query</div>
+          <div class="error-msg" id="error-text"></div>
+        </div>
+      </div>
+
+      <!-- Results Section -->
+      <section id="results-section" class="results-container" style="display: none;">
+        <div class="tabs-header">
+          <button class="tab-btn active" data-tab="tab-sql">⚙️ Generated SQL</button>
+          <button class="tab-btn" data-tab="tab-data">📊 Results <span id="badge-row-count" class="pill pill-green">0</span></button>
+          <button class="tab-btn" data-tab="tab-explanation">💡 Explanation</button>
+        </div>
+
+        <div class="tab-content active" id="tab-sql">
+          <div class="sql-card">
+            <div class="sql-header">
+              <div class="sql-tags">
+                <span class="pill pill-blue" id="sql-time-pill">⏱ 0 ms</span>
+                <span class="pill pill-green">✅ Safe & Validated</span>
+              </div>
+              <button id="btn-copy-sql" class="btn btn-sm">📋 Copy SQL</button>
+            </div>
+            <pre class="sql-code-block"><code id="sql-display"></code></pre>
+          </div>
+        </div>
+
+        <div class="tab-content" id="tab-data">
+          <div class="data-card">
+            <div class="data-header">
+              <div class="data-meta" id="data-meta">Showing 0 rows</div>
+              <button id="btn-download-csv" class="btn btn-sm btn-outline">⬇️ Download CSV</button>
+            </div>
+            <div class="table-wrapper">
+              <table id="results-table" class="results-table">
+                <thead id="results-thead"></thead>
+                <tbody id="results-tbody"></tbody>
+              </table>
+            </div>
+          </div>
+        </div>
+
+        <div class="tab-content" id="tab-explanation">
+          <div class="explanation-card">
+            <div class="explanation-header">💡 Query Breakdown</div>
+            <div class="explanation-body" id="explanation-text"></div>
+            <div class="explanation-question">
+              <strong>Your Input:</strong> <span id="explanation-question-text"></span>
+            </div>
+          </div>
+        </div>
+      </section>
+
+      <!-- Empty State -->
+      <section id="empty-state" class="empty-state">
+        <div class="empty-icon">🧠</div>
+        <div class="empty-title">Ask a question to get started</div>
+        <p class="empty-subtitle">Type in the query box above or choose from the sample questions in the sidebar.</p>
+      </section>
+
+      <!-- Pipeline Details Accordion -->
+      <section class="pipeline-section">
+        <details class="pipeline-details">
+          <summary>ℹ️ How does the NLP pipeline work?</summary>
+          <div class="pipeline-steps-grid">
+            <div class="pipeline-step-item">
+              <span class="step-num">1</span>
+              <div>
+                <strong>Text Normalisation</strong>
+                <p>Lowercases, expands contractions (who's → who is), strips irrelevant punctuation.</p>
+              </div>
+            </div>
+            <div class="pipeline-step-item">
+              <span class="step-num">2</span>
+              <div>
+                <strong>Table Detection</strong>
+                <p>Keywords like <em>student, course, enrollment</em> resolve to their schema tables.</p>
+              </div>
+            </div>
+            <div class="pipeline-step-item">
+              <span class="step-num">3</span>
+              <div>
+                <strong>Intent & Aggregation</strong>
+                <p>Recognizes <em>count, average, top N, highest</em> to determine SELECT / COUNT / AGGREGATE.</p>
+              </div>
+            </div>
+            <div class="pipeline-step-item">
+              <span class="step-num">4</span>
+              <div>
+                <strong>Filter Extraction</strong>
+                <p>Conditions like <em>more than 80 marks</em> become parameterized WHERE clauses with <code>?</code>.</p>
+              </div>
+            </div>
+            <div class="pipeline-step-item">
+              <span class="step-num">5</span>
+              <div>
+                <strong>Sort & Limit</strong>
+                <p><em>Top 5, descending, lowest</em> set ORDER BY and LIMIT clauses deterministically.</p>
+              </div>
+            </div>
+            <div class="pipeline-step-item">
+              <span class="step-num">6</span>
+              <div>
+                <strong>Join Resolution</strong>
+                <p>Cross-table relations trigger a validated 3-table JOIN across students and courses.</p>
+              </div>
+            </div>
+            <div class="pipeline-step-item">
+              <span class="step-num">7</span>
+              <div>
+                <strong>Security Validation</strong>
+                <p>Only SELECT queries pass. Multi-statement attacks and forbidden tokens are rejected.</p>
+              </div>
+            </div>
+            <div class="pipeline-step-item">
+              <span class="step-num">8</span>
+              <div>
+                <strong>Live Execution</strong>
+                <p>Executes against SQLite database and renders reactive results with microsecond latency.</p>
+              </div>
+            </div>
+          </div>
+        </details>
+      </section>
+    </main>
+  </div>
+
+  <script src="app.js"></script>
+</body>
+</html>
